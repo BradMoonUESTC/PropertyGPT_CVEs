@@ -1,8 +1,4 @@
-/**
- *Submitted for verification at Etherscan.io on 2017-11-08
-*/
-
-pragma solidity ^0.4.13;
+pragma solidity 0.6.12;
 
 contract Tiles {
 
@@ -11,7 +7,7 @@ contract Tiles {
     uint private constant STARTING_GAME_NUMBER = 1;
     uint public DEFAULT_GAME_COST = 5000000000000000;
 
-    address private owner;
+    address payable private owner;
 
     uint public currentGameNumber;
     uint public currentGameBalance;
@@ -37,22 +33,7 @@ contract Tiles {
     event FailedToClaim(address indexed claimedBy, uint indexed amountToClaim);
     event PrintWinningInfo(bytes32 hash, uint xCoord, uint yCoord);
 
-    modifier onlyOwner() {
-        require(msg.sender == owner);
-        _;
-    }
-
-    modifier gameRunning() {
-        require(!gameStopped);
-        _;
-    }
-
-    modifier gameNotRunning() {
-        require(gameStopped == true);
-        _;
-    }
-
-    function Tiles() payable {
+    constructor() public payable {
         owner = msg.sender;
         currentGameNumber = STARTING_GAME_NUMBER;
         currentGameCost = DEFAULT_GAME_COST;
@@ -63,42 +44,59 @@ contract Tiles {
         nextGameCost = DEFAULT_GAME_COST;
     }
 
-    function cancelContract() onlyOwner returns (bool) {
+    modifier onlyOwner() {
+        require(msg.sender == owner, "Caller is not the owner");
+        _;
+    }
+
+    modifier gameRunning() {
+        require(!gameStopped, "Game is stopped");
+        _;
+    }
+
+    modifier gameNotRunning() {
+        require(gameStopped == true, "Game is not stopped");
+        _;
+    }
+
+    function cancelContract() public onlyOwner returns (bool) {
         gameStopped = true;
         refundTiles();
         refundWinnings();
+        return true;
     }
 
-    function getRightCoordinate(byte input) returns(uint) {
-        byte val = input & byte(15);
-        return uint(val);
-    }
+function getRightCoordinate(byte input) public pure returns(uint) {
+    uint8 val = uint8(input) & 15; // Cast `byte` to `uint8` and then apply bitwise AND
+    return uint(val); // `val` is already `uint8` which can be safely cast to `uint`
+}
 
-    function getLeftCoordinate(byte input) returns(uint) {
-        byte val = input >> 4;
-        return uint(val);
-    }
+function getLeftCoordinate(byte input) public pure returns(uint) {
+    uint8 val = uint8(input) >> 4; // Cast `byte` to `uint8` and then right shift
+    return uint(val); // `val` is already `uint8` which can be safely cast to `uint`
+}
+
 
     function determineWinner() private {
-        bytes32 winningHash = block.blockhash(block.number - 1);
+        bytes32 winningHash = blockhash(block.number - 1);
         byte winningPair = winningHash[31];
         uint256 winningX = getRightCoordinate(winningPair);
         uint256 winningY = getLeftCoordinate(winningPair);
         address winner = tiles[winningX][winningY].claimedBy;
-        PrintWinningInfo(winningHash, winningX, winningY);
-        GameWon(currentGameNumber, winner);
+        emit PrintWinningInfo(winningHash, winningX, winningY);
+        emit GameWon(currentGameNumber, winner);
         resetGame(winner);
     }
 
-    function claimTile(uint xCoord, uint yCoord, uint gameNumber) gameRunning payable {
+    function claimTile(uint xCoord, uint yCoord, uint gameNumber) public gameRunning payable {
         if (gameNumber != currentGameNumber || tiles[xCoord][yCoord].gameClaimed == currentGameNumber) {
-            revert();
+            revert("Tile already claimed this game or wrong game number");
         }
-        require(msg.value == currentGameCost);
+        require(msg.value == currentGameCost, "Incorrect value");
 
         currentGameBalance += msg.value;
         tiles[xCoord][yCoord] = Tile(currentGameNumber, msg.sender);
-        TileClaimed(currentGameNumber, xCoord, yCoord, msg.sender);
+        emit TileClaimed(currentGameNumber, xCoord, yCoord, msg.sender);
         numTilesClaimed += 1;
         if (numTilesClaimed == NUM_TILES) {
             determineWinner();
@@ -129,8 +127,9 @@ contract Tiles {
             for (uint j = 0; j < SIDE_LENGTH; j++) {
                 currTile = tiles[i][j];
                 if (currTile.gameClaimed == currentGameNumber) {
-                    if (currTile.claimedBy.send(currentGameCost)) {
-                        tiles[i][j] = Tile(0, 0x0);
+                    address payable tileOwner = address(uint160(currTile.claimedBy));
+                    if (tileOwner.send(currentGameCost)) {
+                        tiles[i][j] = Tile(0, address(0));
                     }
                 }
             }
@@ -138,11 +137,9 @@ contract Tiles {
     }
 
     function refundWinnings() private {
-        address currAddress;
-        uint currAmount;
         for (uint i = STARTING_GAME_NUMBER; i < currentGameNumber; i++) {
-            currAddress = gameToWinner[i];
-            currAmount = pendingWithdrawals[currAddress];
+            address payable currAddress = address(uint160(gameToWinner[i]));
+            uint currAmount = pendingWithdrawals[currAddress];
             if (currAmount != 0) {
                 if (currAddress.send(currAmount)) {
                     pendingWithdrawals[currAddress] = 0;
@@ -151,29 +148,33 @@ contract Tiles {
         }
     }
 
-    function claimWinnings() {
-        if (pendingWithdrawals[msg.sender] != 0) {
-            if (msg.sender.send(pendingWithdrawals[msg.sender])) {
-                WinningsClaimed(msg.sender, pendingWithdrawals[msg.sender]);
-                pendingWithdrawals[msg.sender] = 0;
+    function claimWinnings() public {
+        uint amount = pendingWithdrawals[msg.sender];
+        if (amount != 0) {
+            address payable sender = msg.sender;
+            if (sender.send(amount)) {
+                emit WinningsClaimed(sender, amount);
+                pendingWithdrawals[sender] = 0;
             } else {
-                FailedToClaim(msg.sender, pendingWithdrawals[msg.sender]);
+                emit FailedToClaim(sender, amount);
             }
         }
     }
 
-    function updateGameCost(uint newGameCost) onlyOwner returns (bool) {
+    function updateGameCost(uint newGameCost) public onlyOwner returns (bool) {
         if (newGameCost > 0) {
             nextGameCost = newGameCost;
             willChangeCost = true;
+            return true;
         }
+        return false;
     }
 
-    function claimOwnersEarnings() onlyOwner {
-        if (gameEarnings != 0) {
-            if (owner.send(gameEarnings)) {
-                gameEarnings = 0;
-            }
+    function claimOwnersEarnings() public onlyOwner {
+        uint amount = gameEarnings;
+        if (amount != 0) {
+            owner.transfer(amount);
+            gameEarnings = 0;
         }
     }
 }
