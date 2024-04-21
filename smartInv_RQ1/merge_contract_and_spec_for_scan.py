@@ -73,8 +73,8 @@ def process_and_zip_files_with_function_name(template_dir, contracts_dir):
         print(f"Processed and zipped {filename} into {zip_path}")
 
 # Define the directories
-template_dir = "smartInv_RQ1/templates/template_anyswap"
-contracts_dir = "smartInv_RQ1/specs/spec_anyswap"
+template_dir = "smartInv_RQ1/templates/template_elastic"
+contracts_dir = "smartInv_RQ1/specs/spec_elastic"
 
 # Call the function
 process_and_zip_files_with_function_name(template_dir, contracts_dir)
